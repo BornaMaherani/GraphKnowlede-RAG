@@ -1,16 +1,15 @@
-# embedding_service.py
+# embedding_service.py (updated)
 import logging
-from typing import List, Dict, Any
+from typing import List
 from sentence_transformers import SentenceTransformer
-import torch
 from langchain_community.graphs import Neo4jGraph
 
 class EmbeddingService:
     """
-    Service for generating embeddings and managing vector indexes in Neo4j.
+    Service for generating embeddings and managing vector indexes in Neo4j for the new graph schema.
     """
     
-    def __init__(self, model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
+    def __init__(self, model_name: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"):
         self.model_name = model_name
         self.model = None
         self._setup_logging()
@@ -55,108 +54,81 @@ class EmbeddingService:
     
     def create_vector_indexes(self, graph: Neo4jGraph):
         """
-        Create vector indexes for embeddings in Neo4j.
+        Create vector indexes for embeddings in Neo4j based on new schema.
         
         Args:
             graph: Neo4jGraph instance
         """
         try:
-            # Create full-text index for Clause.text
-            fulltext_queries = [
-                # Full-text index for Clause text
-                "CREATE FULLTEXT INDEX clause_text_fulltext IF NOT EXISTS FOR (c:Clause) ON EACH [c.text]",
-                
-                # Full-text index for Regulation title  
-                "CREATE FULLTEXT INDEX regulation_title_fulltext IF NOT EXISTS FOR (r:Regulation) ON EACH [r.title]",
-                
-                # Vector index for Clause embeddings
-                """
-                CREATE VECTOR INDEX clause_embedding_vector IF NOT EXISTS
-                FOR (c:Clause) ON (c.embedding)
-                OPTIONS {indexConfig: {
-                    `vector.dimensions`: 384,
-                    `vector.similarity_function`: 'cosine'
-                }}
-                """,
-                
-                # Vector index for Regulation embeddings
-                """
-                CREATE VECTOR INDEX regulation_embedding_vector IF NOT EXISTS
-                FOR (r:Regulation) ON (r.embedding)
-                OPTIONS {indexConfig: {
-                    `vector.dimensions`: 384,
-                    `vector.similarity_function`: 'cosine'
-                }}
-                """
+            # Define labels from new schema
+            labels = [
+                'Ordinary_Law', 'Single_Article_Law', 'Executive_Regulation',
+                'Circular_Directive', 'Amendment_Addition', 'Related_Laws',
+                'Article', 'Note_Clause', 'Sub_section', 'Sub_paragraph'
             ]
             
-            for query in fulltext_queries:
-                graph.query(query)
-                self.logger.debug(f"Executed index query: {query}")
+            for label in labels:
+                # Create text index on content
+                text_index_query = f"CREATE TEXT INDEX {label.lower()}_content_text IF NOT EXISTS FOR (n:{label}) ON (n.content)"
+                graph.query(text_index_query)
+                self.logger.debug(f"Created text index for {label}")
+                
+                # Create vector index on embedding
+                vector_query = f"""
+                CREATE VECTOR INDEX {label.lower()}_embedding_vector IF NOT EXISTS
+                FOR (n:{label}) ON (n.embedding)
+                OPTIONS {{indexConfig: {{
+                    `vector.dimensions`: 768,
+                    `vector.similarity_function`: 'cosine'
+                }}}}
+                """
+                graph.query(vector_query)
+                self.logger.debug(f"Created vector index for {label}")
             
-            self.logger.info("Vector and full-text indexes created successfully")
+            # Create general fulltext index across all nodes
+            fulltext_query = "CREATE FULLTEXT INDEX content_fulltext IF NOT EXISTS FOR (n:Ordinary_Law|Single_Article_Law|Executive_Regulation|Circular_Directive|Amendment_Addition|Related_Laws|Article|Note_Clause|Sub_section|Sub_paragraph) ON EACH [n.content]"
+            graph.query(fulltext_query)
+            self.logger.debug("Created general fulltext index")
+            
+            self.logger.info("Vector and text indexes created successfully for new schema")
             
         except Exception as e:
-            self.logger.error(f"Failed to create vector indexes: {e}")
+            self.logger.error(f"Failed to create indexes: {e}")
             raise
     
     def update_node_embeddings(self, graph: Neo4jGraph):
         """
-        Update nodes with their embeddings.
+        Update all nodes with their embeddings based on content.
         
         Args:
             graph: Neo4jGraph instance
         """
         try:
-            # Update Clause embeddings
-            self.logger.info("Updating Clause embeddings...")
-            clauses_query = """
-            MATCH (c:Clause) 
-            WHERE c.text IS NOT NULL AND c.embedding IS NULL
-            RETURN c.id as clause_id, c.text as text
+            # Get all nodes without embeddings
+            query = """
+            MATCH (n)
+            WHERE n.content IS NOT NULL AND n.embedding IS NULL
+            RETURN elementId(n) as node_id, labels(n)[0] as label, n.content as content
             """
-            clauses = graph.query(clauses_query)
+            nodes = graph.query(query)
             
-            if clauses:
-                texts = [clause['text'] for clause in clauses if clause['text']]
+            if nodes:
+                texts = [node['content'] for node in nodes]
                 embeddings = self.generate_embeddings(texts)
                 
-                for i, clause in enumerate(clauses):
-                    if i < len(embeddings):
-                        update_query = """
-                        MATCH (c:Clause {id: $clause_id})
-                        SET c.embedding = $embedding
-                        """
-                        graph.query(update_query, params={
-                            "clause_id": clause['clause_id'],
-                            "embedding": embeddings[i]
-                        })
+                for i, node in enumerate(nodes):
+                    label = node['label']
+                    update_query = f"""
+                    MATCH (n:{label}) WHERE elementId(n) = $node_id
+                    SET n.embedding = $embedding
+                    """
+                    graph.query(update_query, params={
+                        "node_id": node['node_id'],
+                        "embedding": embeddings[i]
+                    })
+                    self.logger.debug(f"Updated embedding for node {node['node_id']} ({label})")
             
-            # Update Regulation embeddings
-            self.logger.info("Updating Regulation embeddings...")
-            regulations_query = """
-            MATCH (r:Regulation) 
-            WHERE r.title IS NOT NULL AND r.embedding IS NULL
-            RETURN r.number as regulation_number, r.title as title
-            """
-            regulations = graph.query(regulations_query)
-            
-            if regulations:
-                texts = [reg['title'] for reg in regulations if reg['title']]
-                embeddings = self.generate_embeddings(texts)
-                
-                for i, reg in enumerate(regulations):
-                    if i < len(embeddings):
-                        update_query = """
-                        MATCH (r:Regulation {number: $regulation_number})
-                        SET r.embedding = $embedding
-                        """
-                        graph.query(update_query, params={
-                            "regulation_number": reg['regulation_number'],
-                            "embedding": embeddings[i]
-                        })
-            
-            self.logger.info("Node embeddings updated successfully")
+            self.logger.info("All node embeddings updated successfully")
             
         except Exception as e:
             self.logger.error(f"Failed to update node embeddings: {e}")

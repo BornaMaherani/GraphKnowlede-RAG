@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 import logging
 import sys
 import os
+import json
 from datetime import datetime
 
 class ExcelDataLoader:
@@ -397,3 +398,24 @@ class ExcelDataLoader:
         except Exception as e:
             self.logger.error(f"Quick load failed: {e}", exc_info=True)
             raise
+class JsonDataLoader:
+    def __init__(self, json_paths: List[str]):
+        self.json_paths = json_paths
+    
+    def get_all_nodes(self) -> List[Dict]:
+        nodes = []
+        for path in self.json_paths:
+            if "nodes" in path:  # Filter node files
+                with open(path, 'r', encoding="UTF-8") as f:
+                    data = json.load(f)
+                    nodes.extend(data)  # Assume each JSON is a list of dicts
+        return nodes
+    
+    def get_all_edges(self) -> List[Dict]:
+        edges = []
+        for path in self.json_paths:
+            if "edges" in path:  # Filter edge files
+                with open(path, 'r', encoding="UTF-8") as f:
+                    data = json.load(f)
+                    edges.extend(data)
+        return edges

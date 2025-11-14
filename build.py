@@ -1,10 +1,11 @@
-# build.py (updated)
-# usage_example.py
-import logging'
+# build.py (rewritten)
+import logging
 import os
 from regulation_graph_builder import RegulationGraphBuilder
-from loader import ExcelDataLoader
+from loader import JsonDataLoader  # Assuming JsonDataLoader is implemented as per the provided code
 from embedding_service import EmbeddingService
+from dotenv import load_dotenv
+load_dotenv()
 
 def main():
     # Configure logging
@@ -16,8 +17,13 @@ def main():
     NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
     NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE")
     
-    # Excel file path
-    EXCEL_FILE = "Documents/vazir/1-494.xlsx"
+    # JSON file paths (adjust these to your actual file paths)
+    JSON_FILES = [
+        "law_nodes.json",
+        "law_edges.json",
+        # Add if exists, or other relevant JSONs
+        # Add other JSON files as needed, e.g., "excel_edges.json" if separate
+    ]
     
     try:
         # Initialize graph builder with LangChain Neo4jGraph
@@ -28,14 +34,14 @@ def main():
             database=NEO4J_DATABASE
         )
         
-        # Create constraints and indexes
+        # Create constraints and indexes based on new schema
         graph_builder.create_constraints_and_indexes()
         
-        # Initialize Excel loader
-        excel_loader = ExcelDataLoader(EXCEL_FILE)
+        # Initialize JSON loader
+        json_loader = JsonDataLoader(JSON_FILES)
         
         # Process data and build graph
-        graph_builder.process_excel_data(excel_loader, method='pandas')
+        graph_builder.process_json_data(json_loader)
         
         # Initialize embedding service and create vector indexes
         embedding_service = EmbeddingService()
@@ -47,8 +53,8 @@ def main():
         print(f"Graph Statistics: {stats}")
         
         # Example custom query
-        regulations_count = graph_builder.query_graph("MATCH (r:Regulation) RETURN count(r) as count")
-        print(f"Total regulations in graph: {regulations_count[0]['count']}")
+        nodes_count = graph_builder.query_graph("MATCH (n) RETURN count(n) as count")
+        print(f"Total nodes in graph: {nodes_count[0]['count']}")
         
     except Exception as e:
         logging.error(f"Application error: {e}", exc_info=True)
